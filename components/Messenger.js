@@ -27,16 +27,16 @@ class Messenger extends Component {
       <View style={styles.container}>
         <View style={styles.messagesWrapper}>
           {this.props.messages.map((item, i) => (
-            <View key={item.msg + i} style={styles.messageWrapper}>
+            <View key={item.message + i} style={styles.messageWrapper}>
               <Text
                 style={{
-                  color: item.received ? 'rgb(60,60,60)' : 'orange',
+                  color: item.sender !== 'me' ? 'rgb(60,60,60)' : 'orange',
                   fontSize: 18,
                   fontWeight: 'bold',
                 }}>
-                {item.received ? 'stranger : ' : 'me : '}
+                {item.sender + ' : '}
               </Text>
-              <Text style={styles.messageText}>{item.msg}</Text>
+              <Text style={styles.messageText}>{item.message}</Text>
             </View>
           ))}
         </View>

@@ -5,9 +5,14 @@ import {
   RTCPeerConnection,
   RTCSessionDescription,
 } from 'react-native-webrtc';
-import io from 'socket.io-client';
+import axios from 'axios';
+import uuid from 'react-native-uuid';
 import Messenger from './components/Messenger';
 class App extends React.Component {
+  peerId = uuid.v4();
+  api = axios.create({
+    baseURL: 'http://localhost:3002',
+  });
   state = {
     canAnswer: false,
     messages: [],
@@ -17,39 +22,24 @@ class App extends React.Component {
   initRTCconnection = () => {
     const configuration = {iceServers: [{url: 'stun:stun.l.google.com:19302'}]};
     this.peer = new RTCPeerConnection(configuration);
-    this.peer.onicecandidate = this.onIceCandidate;
     this.peer.oniceconnectionstatechange = this.onIceConnectionsStateChange;
     this.dataChannel = this.peer.createDataChannel('channel');
     this.dataChannel.onopen = this.onDataChannelOpened;
     this.dataChannel.onmessage = this.onReceiveMessage;
   };
 
-  initSocketConnection = () => {
-    this.socket = io.connect('http://localhost:3002');
-    this.socket.on('sdpData', this.onReceiveSDP);
-    this.socket.on('candidate', this.onReceiveCandidate);
-  };
-
-  onReceiveCandidate = candidate => {
-    this.peer.addIceCandidate(new RTCIceCandidate(candidate));
-  };
-
-  onReceiveSDP = async sdp => {
+  onReceiveSDP = async ({data}) => {
+    const {sdp} = data;
     await this.peer.setRemoteDescription(new RTCSessionDescription(sdp));
     if (sdp.type === 'offer') this.setState({canAnswer: true});
   };
 
   componentDidMount() {
     this.initRTCconnection();
-    this.initSocketConnection();
   }
 
-  onReceiveMessage = msg => {
-    const message = {
-      msg: msg.data,
-      received: true,
-    };
-    console.log('message:', message);
+  onReceiveMessage = ({data}) => {
+    const message = JSON.parse(data);
     const messages = [...this.state.messages, message];
     this.setState({messages});
   };
@@ -61,45 +51,33 @@ class App extends React.Component {
   };
 
   componentWillUnmount() {
-    this.socket.close();
     this.peer.close();
   }
 
   onDataChannelOpened = () => {
+    console.log('Connection Openned!');
     this.setState({isConnected: true});
-  };
-
-  onIceCandidate = e => {
-    if (e.candidate) {
-      this.sendCandidate(e.candidate);
-    }
   };
 
   createOffer = async () => {
     const offer = await this.peer.createOffer();
     await this.peer.setLocalDescription(offer);
-    this.sendSdpData(offer);
-  };
-
-  createAnswer = async () => {
-    const answer = await this.peer.createAnswer();
-    await this.peer.setLocalDescription(answer);
-    this.sendSdpData(answer);
-  };
-
-  sendSdpData = sdp => {
-    this.socket.emit('sdpData', sdp);
-  };
-
-  sendCandidate = candidate => {
-    this.socket.emit('candidate', candidate);
+    const payload = {
+      sdp: offer,
+      id: this.peerId,
+    };
+    await this.api.post('/', payload).then(this.onReceiveSDP);
   };
 
   sendMessage = message => {
-    const msg = {msg: message};
+    const msg = {message, sender: 'me'};
     const messages = [...this.state.messages, msg];
     this.setState({messages});
-    this.dataChannel.send(message);
+    const data = JSON.stringify({
+      id: this.peerId,
+      message,
+    });
+    this.dataChannel.send(data);
   };
 
   disconnect = () => {
@@ -109,43 +87,53 @@ class App extends React.Component {
   };
 
   render() {
-    const offerDisabled = this.state.isConnected;
-    const answerDisabled = this.state.isConnected || !this.state.canAnswer;
+    const {isConnected} = this.state;
     return (
       <View style={styles.container}>
         <Text style={styles.title}>WebRTC Demo</Text>
-        <View style={styles.rowActions}>
+
+        <View style={styles.row}>
+          <View
+            style={{flexDirection: 'row', flex: 0.49, alignItems: 'center'}}>
+            <View
+              style={
+                isConnected ? styles.circleOnline : styles.circleOffline
+              }></View>
+            {isConnected ? (
+              <Text style={styles.textOnline}>Online</Text>
+            ) : (
+              <Text style={styles.textOffline}>Offline</Text>
+            )}
+          </View>
+          <View style={{flex: 0.49}}></View>
+        </View>
+        <View style={styles.row}>
           <TouchableOpacity
-            disabled={offerDisabled}
-            style={offerDisabled ? styles.buttonDisabled : styles.button}
+            disabled={isConnected}
+            style={isConnected ? styles.buttonDisabled : styles.button}
             onPress={this.createOffer}>
             <Text
               style={
-                offerDisabled ? styles.buttonTextDisabled : styles.buttonText
+                isConnected ? styles.buttonTextDisabled : styles.buttonText
               }>
               Offer
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            disabled={answerDisabled}
-            style={answerDisabled ? styles.buttonDisabled : styles.button}>
+            disabled={!isConnected}
+            style={
+              !isConnected ? styles.buttonDisabled : styles.disconnectButton
+            }>
             <Text
               style={
-                answerDisabled ? styles.buttonTextDisabled : styles.buttonText
+                !isConnected
+                  ? styles.buttonTextDisabled
+                  : styles.disconnectButtonText
               }
-              onPress={this.createAnswer}>
-              Answer
+              onPress={this.disconnect}>
+              Disconnect
             </Text>
           </TouchableOpacity>
-        </View>
-        <View style={styles.rowActions}>
-          <Button
-            onPress={this.disconnect}
-            disabled={!this.state.isConnected}
-            title="Disconnect"
-            color="red"
-          />
-          <View style={{flex: 0.49}}></View>
         </View>
         <Messenger
           isConnected={this.state.isConnected}
@@ -180,14 +168,37 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: 'rgb(120,120,120)',
   },
-  rowActions: {
+  row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 10,
   },
   disconnectButton: {
-    color: 'red',
+    flex: 0.49,
+    paddingVertical: 6,
+    backgroundColor: '#ff1919',
+    borderRadius: 4,
   },
+  disconnectButtonText: {
+    color: 'white',
+    textAlign: 'center',
+  },
+  circleOnline: {
+    backgroundColor: '#4BB543',
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 6,
+  },
+  circleOffline: {
+    backgroundColor: '#ff1919',
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 6,
+  },
+  textOnline: {color: '#4BB543', fontSize: 16},
+  textOffline: {color: '#ff1919', fontSize: 16},
 });
 
 export default App;
